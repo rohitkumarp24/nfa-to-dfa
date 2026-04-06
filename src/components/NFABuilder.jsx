@@ -1,19 +1,85 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 
-const DEFAULT_NFA = {
-  states: ['q0', 'q1', 'q2'],
-  alphabet: ['a', 'b'],
-  start: 'q0',
-  accept: ['q2'],
-  transitions: {
-    q0: { a: ['q0', 'q1'], b: ['q0'] },
-    q1: { a: [],           b: ['q2'] },
-    q2: { a: [],           b: []     },
+// ── Preset NFA examples ───────────────────────────────────────────────
+const PRESETS = {
+  sample: {
+    label: '📖 Default Sample',
+    nfa: {
+      states: ['q0', 'q1', 'q2'],
+      alphabet: ['a', 'b'],
+      start: 'q0',
+      accept: ['q2'],
+      transitions: {
+        q0: { a: ['q0', 'q1'], b: ['q0'] },
+        q1: { a: [],           b: ['q2'] },
+        q2: { a: [],           b: []     },
+      },
+      epsilon: { q0: [], q1: [], q2: [] },
+    },
   },
-  epsilon: { q0: [], q1: [], q2: [] },
+  endsWith_ab: {
+    label: '🔚 Ends with "ab"',
+    nfa: {
+      states: ['q0', 'q1', 'q2'],
+      alphabet: ['a', 'b'],
+      start: 'q0',
+      accept: ['q2'],
+      transitions: {
+        q0: { a: ['q0', 'q1'], b: ['q0'] },
+        q1: { a: [],           b: ['q2'] },
+        q2: { a: [],           b: []     },
+      },
+      epsilon: { q0: [], q1: [], q2: [] },
+    },
+  },
+  evenZeros: {
+    label: '⓪ Even number of 0s',
+    nfa: {
+      states: ['q0', 'q1'],
+      alphabet: ['0', '1'],
+      start: 'q0',
+      accept: ['q0'],
+      transitions: {
+        q0: { '0': ['q1'], '1': ['q0'] },
+        q1: { '0': ['q0'], '1': ['q1'] },
+      },
+      epsilon: { q0: [], q1: [] },
+    },
+  },
+  containsAB: {
+    label: '🔍 Contains "ab" anywhere',
+    nfa: {
+      states: ['q0', 'q1', 'q2'],
+      alphabet: ['a', 'b'],
+      start: 'q0',
+      accept: ['q2'],
+      transitions: {
+        q0: { a: ['q0', 'q1'], b: ['q0'] },
+        q1: { a: [],           b: ['q2'] },
+        q2: { a: ['q2'],       b: ['q2'] },
+      },
+      epsilon: { q0: [], q1: [], q2: [] },
+    },
+  },
+  epsilonExample: {
+    label: '✨ ε-transition Demo',
+    nfa: {
+      states: ['q0', 'q1', 'q2', 'q3'],
+      alphabet: ['a', 'b'],
+      start: 'q0',
+      accept: ['q3'],
+      transitions: {
+        q0: { a: ['q1'], b: []     },
+        q1: { a: [],     b: ['q2'] },
+        q2: { a: [],     b: []     },
+        q3: { a: [],     b: []     },
+      },
+      epsilon: { q0: [], q1: [], q2: ['q3'], q3: [] },
+    },
+  },
 };
 
-// ── Tiny UI building blocks ────────────────────────────────────────────
+// ── Small UI helpers ──────────────────────────────────────────────────
 function SectionLabel({ children }) {
   return (
     <div className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2 font-mono">
@@ -34,9 +100,7 @@ function Badge({ children, color = 'indigo', onRemove }) {
         <button
           onClick={onRemove}
           className="text-slate-500 hover:text-red-400 transition-colors ml-0.5 leading-none"
-        >
-          ×
-        </button>
+        >×</button>
       )}
     </span>
   );
@@ -44,7 +108,7 @@ function Badge({ children, color = 'indigo', onRemove }) {
 
 function AddInput({ value, onChange, onAdd, placeholder, color = 'indigo' }) {
   const accent = color === 'indigo' ? 'focus:ring-indigo-500' : 'focus:ring-emerald-500';
-  const btnBg = color === 'indigo'
+  const btnBg  = color === 'indigo'
     ? 'bg-indigo-600 hover:bg-indigo-500'
     : 'bg-emerald-600 hover:bg-emerald-500';
   return (
@@ -59,24 +123,46 @@ function AddInput({ value, onChange, onAdd, placeholder, color = 'indigo' }) {
       <button
         onClick={onAdd}
         className={`${btnBg} text-white text-xs font-bold px-3 py-1 rounded transition-colors`}
-      >
-        + Add
-      </button>
+      >+ Add</button>
     </div>
   );
 }
-// ───────────────────────────────────────────────────────────────────────
 
+// ── TransitionCell — local raw state, validate on blur ─────────────────
+// This is the KEY fix for the typing bug
+function TransitionCell({ value, onCommit, color = 'indigo' }) {
+  const [raw, setRaw] = useState(value);
+
+  // Sync if parent resets (e.g. preset loaded)
+  useState(() => { setRaw(value); }, [value]);
+
+  const focusRing = color === 'indigo' ? 'focus:ring-indigo-500' : 'focus:ring-purple-500';
+  const textColor = color === 'indigo' ? 'text-slate-300' : 'text-purple-300';
+
+  return (
+    <input
+      type="text"
+      value={raw}
+      placeholder="∅"
+      onChange={e => setRaw(e.target.value)}
+      onBlur={() => onCommit(raw)}        // ← validate ONLY on blur
+      onKeyDown={e => e.key === 'Enter' && onCommit(raw)}
+      className={`w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono ${textColor} placeholder-slate-600 focus:outline-none focus:ring-1 ${focusRing} text-xs`}
+    />
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────
 export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
-  const [newState, setNewState] = useState('');
+  const [newState,  setNewState]  = useState('');
   const [newSymbol, setNewSymbol] = useState('');
 
-  // ── State management ────────────────────────────────────────────────
+  // ── State management ──────────────────────────────────────────────
   const addState = () => {
     const s = newState.trim();
     if (!s || nfa.states.includes(s)) return;
     const newTransitions = { ...nfa.transitions };
-    const newEpsilon = { ...nfa.epsilon };
+    const newEpsilon     = { ...nfa.epsilon };
     newTransitions[s] = Object.fromEntries(nfa.alphabet.map(sym => [sym, []]));
     newEpsilon[s] = [];
     onNFAChange({ ...nfa, states: [...nfa.states, s], transitions: newTransitions, epsilon: newEpsilon });
@@ -98,14 +184,14 @@ export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
     onNFAChange({
       ...nfa,
       states,
-      start: nfa.start === toRemove ? states[0] : nfa.start,
+      start:  nfa.start === toRemove ? states[0] : nfa.start,
       accept: nfa.accept.filter(s => s !== toRemove),
       transitions,
       epsilon,
     });
   };
 
-  // ── Alphabet management ─────────────────────────────────────────────
+  // ── Alphabet management ───────────────────────────────────────────
   const addSymbol = () => {
     const sym = newSymbol.trim();
     if (!sym || sym === 'ε' || nfa.alphabet.includes(sym) || sym.length > 3) return;
@@ -128,8 +214,8 @@ export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
     onNFAChange({ ...nfa, alphabet, transitions });
   };
 
-  // ── Transitions ─────────────────────────────────────────────────────
-  const updateTransition = (state, symbol, raw) => {
+  // ── Transition commits (called on blur) ───────────────────────────
+  const commitTransition = useCallback((state, symbol, raw) => {
     const targets = raw.split(',').map(s => s.trim()).filter(s => nfa.states.includes(s));
     onNFAChange({
       ...nfa,
@@ -138,30 +224,49 @@ export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
         [state]: { ...nfa.transitions[state], [symbol]: targets },
       },
     });
-  };
+  }, [nfa, onNFAChange]);
 
-  const updateEpsilon = (state, raw) => {
+  const commitEpsilon = useCallback((state, raw) => {
     const targets = raw.split(',').map(s => s.trim()).filter(s => nfa.states.includes(s));
     onNFAChange({ ...nfa, epsilon: { ...nfa.epsilon, [state]: targets } });
+  }, [nfa, onNFAChange]);
+
+  // ── Preset loader ─────────────────────────────────────────────────
+  const loadPreset = (key) => {
+    if (key && PRESETS[key]) onNFAChange(PRESETS[key].nfa);
   };
 
   return (
     <div className="flex flex-col h-full bg-slate-950 overflow-y-auto">
+
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-bold text-slate-200 font-mono">NFA Builder</h2>
           <p className="text-xs text-slate-500 mt-0.5">Define your automaton</p>
         </div>
-        <button
-          onClick={() => onNFAChange(DEFAULT_NFA)}
-          className="text-xs px-2 py-1 rounded border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-300 transition-colors font-mono"
-        >
-          Sample
-        </button>
       </div>
 
       <div className="flex flex-col gap-5 p-4">
+
+        {/* ── Presets dropdown ── */}
+        <div>
+          <SectionLabel>Load Preset Example</SectionLabel>
+          <select
+            defaultValue=""
+            onChange={e => { loadPreset(e.target.value); e.target.value = ''; }}
+            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-2 text-xs font-mono text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+          >
+            <option value="" disabled>— Choose a preset —</option>
+            {Object.entries(PRESETS).map(([key, { label }]) => (
+              <option key={key} value={key}>{label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-600 mt-1 font-mono">
+            Loads a ready-made NFA — or build your own below
+          </p>
+        </div>
+
         {/* ── States ── */}
         <div>
           <SectionLabel>States (Q)</SectionLabel>
@@ -245,7 +350,7 @@ export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
         <div>
           <SectionLabel>Transition Function (δ)</SectionLabel>
           <p className="text-xs text-slate-600 mb-2 font-mono">
-            Comma-separated targets. Only valid states saved.
+            Type targets, press Enter or click away to save.
           </p>
           <div className="bg-slate-900 rounded-lg border border-slate-800 overflow-x-auto">
             <table className="text-xs w-full">
@@ -268,22 +373,20 @@ export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
                     </td>
                     {nfa.alphabet.map(sym => (
                       <td key={sym} className="px-1 py-1">
-                        <input
-                          type="text"
+                        <TransitionCell
+                          key={`${state}-${sym}-${(nfa.transitions[state]?.[sym] || []).join(',')}`}
                           value={(nfa.transitions[state]?.[sym] || []).join(',')}
-                          onChange={e => updateTransition(state, sym, e.target.value)}
-                          placeholder="∅"
-                          className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-slate-300 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs"
+                          onCommit={raw => commitTransition(state, sym, raw)}
+                          color="indigo"
                         />
                       </td>
                     ))}
                     <td className="px-1 py-1">
-                      <input
-                        type="text"
+                      <TransitionCell
+                        key={`${state}-eps-${(nfa.epsilon[state] || []).join(',')}`}
                         value={(nfa.epsilon[state] || []).join(',')}
-                        onChange={e => updateEpsilon(state, e.target.value)}
-                        placeholder="∅"
-                        className="w-full bg-slate-800 border border-slate-700 rounded px-1.5 py-0.5 text-center font-mono text-purple-300 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-purple-500 text-xs"
+                        onCommit={raw => commitEpsilon(state, raw)}
+                        color="purple"
                       />
                     </td>
                   </tr>
@@ -292,9 +395,10 @@ export default function NFABuilder({ nfa, onNFAChange, onConvert }) {
             </table>
           </div>
         </div>
+
       </div>
 
-      {/* Convert Button — sticky at bottom */}
+      {/* Convert Button */}
       <div className="p-4 pt-0 mt-auto">
         <button
           onClick={onConvert}
