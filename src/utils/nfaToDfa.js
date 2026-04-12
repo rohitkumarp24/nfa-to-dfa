@@ -103,3 +103,47 @@ export function subsetConstruction(nfa) {
     steps,
   };
 }
+// ── Add this function at the very bottom of your existing nfaToDfa.js ──
+
+/**
+ * Removes all ε-transitions from an NFA.
+ * For each state s:
+ *   δ'(s, a) = ε-closure( move( ε-closure({s}), a ) )
+ *   s is accepting if ε-closure({s}) ∩ F ≠ ∅
+ */
+export function removeEpsilonTransitions(nfa) {
+  const { states, alphabet, start, accept } = nfa;
+
+  const newTransitions = {};
+  const newAccept      = [];
+
+  for (const state of states) {
+    const closure = epsilonClosure([state], nfa);
+    newTransitions[state] = {};
+
+    // Accepting if closure hits any original accept state
+    if (closure.some(s => accept.includes(s))) {
+      newAccept.push(state);
+    }
+
+    for (const sym of alphabet) {
+      const reachable = new Set();
+      for (const s of closure) {
+        const targets = nfa.transitions[s]?.[sym] || [];
+        for (const t of targets) {
+          epsilonClosure([t], nfa).forEach(es => reachable.add(es));
+        }
+      }
+      newTransitions[state][sym] = [...reachable].sort();
+    }
+  }
+
+  return {
+    states,
+    alphabet,
+    start,
+    accept:      newAccept,
+    transitions: newTransitions,
+    epsilon:     Object.fromEntries(states.map(s => [s, []])),
+  };
+}
